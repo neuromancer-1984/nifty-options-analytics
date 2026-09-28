@@ -1,0 +1,32 @@
+name: Collect daily snapshot
+on:
+  schedule:
+    - cron: "30 13 * * 1-5"   # 19:00 IST
+    - cron: "30 16 * * 1-5"   # 22:00 IST retry (overwrites same day)
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: "Backfill last N calendar days (0 = today only)"
+        default: "0"
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run collector
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKFILL: ${{ github.event.inputs.backfill_days }}
+        run: |
+          python collector.py --init
+          if [ -n "$BACKFILL" ] && [ "$BACKFILL" != "0" ]; then
+            python collector.py --backfill "$BACKFILL"
+          else
+            python collector.py --once
+          fi
