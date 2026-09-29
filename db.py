@@ -1,10 +1,8 @@
 import os
 
 import pandas as pd
-import psycopg2
-from psycopg2.extras import execute_values
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 
@@ -16,14 +14,22 @@ METRIC_COLS = ["pcr_oi", "pcr_vol", "max_pain", "atm_strike", "atm_iv", "iv_skew
 
 def db_url():
     url = os.getenv("DATABASE_URL")
-    if url:
-        return url
-    import streamlit as st
-    return st.secrets["DATABASE_URL"]
+    if not url:
+        import streamlit as st
+        url = st.secrets["DATABASE_URL"]
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
+_engine = None
 
 
 def engine():
-    return create_engine(db_url(), pool_pre_ping=True)
+    global _engine
+    if _engine is None:
+        _engine = create_engine(db_url(), pool_pre_ping=True)
+    return _engine
 
 
 def _clean(v):
@@ -33,31 +39,35 @@ def _clean(v):
 
 
 def init_schema():
-    with psycopg2.connect(db_url()) as c, c.cursor() as cur:
-        cur.execute(open(os.path.join(os.path.dirname(__file__), "schema.sql")).read())
+    sql = open(os.path.join(os.path.dirname(__file__), "schema.sql")).read()
+    with engine().begin() as c:
+        for stmt in filter(None, (s.strip() for s in sql.split(";"))):
+            c.execute(text(stmt))
 
 
 def insert_snapshot(ts, symbol, expiry, spot, chain_df, metrics):
-    with psycopg2.connect(db_url()) as c, c.cursor() as cur:
-        cur.execute("DELETE FROM snapshots WHERE symbol=%s AND (ts AT TIME ZONE 'Asia/Kolkata')::date=%s",
-            (symbol, ts.date()))
-        cur.execute("""INSERT INTO snapshots (ts, symbol, expiry, spot) VALUES (%s,%s,%s,%s)
-                       ON CONFLICT DO NOTHING RETURNING snapshot_id""", (ts, symbol, expiry, spot))
-        row = cur.fetchone()
+    with engine().begin() as c:
+        row = c.execute(text("""INSERT INTO snapshots (ts, symbol, expiry, spot)
+                                 VALUES (:ts,:symbol,:expiry,:spot)
+                                 ON CONFLICT DO NOTHING RETURNING snapshot_id"""),
+                        dict(ts=ts, symbol=symbol, expiry=expiry, spot=spot)).fetchone()
         if not row:
             return None
         sid = row[0]
-        rows = [(sid, *[_clean(v) for v in r]) for r in chain_df[CHAIN_COLS].itertuples(index=False)]
-        execute_values(cur, f"INSERT INTO chain (snapshot_id, {','.join(CHAIN_COLS)}) VALUES %s", rows)
-        cur.execute(
-            f"INSERT INTO metrics (snapshot_id, ts, symbol, expiry, spot, {','.join(METRIC_COLS)}) "
-            f"VALUES (%s,%s,%s,%s,%s,{','.join(['%s'] * len(METRIC_COLS))})",
-            (sid, ts, symbol, expiry, spot, *[_clean(metrics[k]) for k in METRIC_COLS]))
+        rows = [dict(sid=sid, **{k: _clean(v) for k, v in zip(CHAIN_COLS, r)})
+                for r in chain_df[CHAIN_COLS].itertuples(index=False)]
+        c.execute(text(f"""INSERT INTO chain (snapshot_id, {','.join(CHAIN_COLS)})
+                           VALUES (:sid, {','.join(':' + k for k in CHAIN_COLS)})"""), rows)
+        c.execute(text(f"""INSERT INTO metrics (snapshot_id, ts, symbol, expiry, spot, {','.join(METRIC_COLS)})
+                           VALUES (:sid,:ts,:symbol,:expiry,:spot,
+                                   {','.join(':' + k for k in METRIC_COLS)})"""),
+                  dict(sid=sid, ts=ts, symbol=symbol, expiry=expiry, spot=spot,
+                       **{k: _clean(metrics[k]) for k in METRIC_COLS}))
         return sid
 
 
 def insert_prediction(ts, symbol, horizon_min, prob_up, cv_acc, baseline_acc, n_train):
-    with psycopg2.connect(db_url()) as c, c.cursor() as cur:
-        cur.execute("""INSERT INTO predictions (ts, symbol, horizon_min, prob_up, cv_acc, baseline_acc, n_train)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                    (ts, symbol, horizon_min, prob_up, cv_acc, baseline_acc, n_train))
+    with engine().begin() as c:
+        c.execute(text("""INSERT INTO predictions (ts, symbol, horizon_min, prob_up, cv_acc, baseline_acc, n_train)
+                          VALUES (:ts,:symbol,:h,:p,:cv,:b,:n) ON CONFLICT DO NOTHING"""),
+                  dict(ts=ts, symbol=symbol, h=horizon_min, p=prob_up, cv=cv_acc, b=baseline_acc, n=n_train))

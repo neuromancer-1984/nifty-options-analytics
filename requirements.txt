@@ -5,7 +5,7 @@ scipy
 scikit-learn
 plotly
 streamlit
-psycopg2-binary
+psycopg[binary]
 sqlalchemy
 python-dotenv
 tzdata
