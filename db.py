@@ -47,6 +47,11 @@ def init_schema():
 
 def insert_snapshot(ts, symbol, expiry, spot, chain_df, metrics):
     with engine().begin() as c:
+        c.execute(text("""DELETE FROM snapshots
+                    WHERE symbol=:symbol
+                    AND (ts AT TIME ZONE 'Asia/Kolkata')::date =
+                        (:ts AT TIME ZONE 'Asia/Kolkata')::date"""),
+            dict(symbol=symbol, ts=ts))
         row = c.execute(text("""INSERT INTO snapshots (ts, symbol, expiry, spot)
                                  VALUES (:ts,:symbol,:expiry,:spot)
                                  ON CONFLICT DO NOTHING RETURNING snapshot_id"""),

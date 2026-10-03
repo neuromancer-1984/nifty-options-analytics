@@ -1,8 +1,7 @@
 name: Collect daily snapshot
 on:
   schedule:
-    - cron: "30 13 * * 1-5"   # 19:00 IST
-    - cron: "30 16 * * 1-5"   # 22:00 IST retry (overwrites same day)
+    - cron: "0 14 * * 1-5"   # 19:30 IST
   workflow_dispatch:
     inputs:
       backfill_days:

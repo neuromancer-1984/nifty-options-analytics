@@ -18,7 +18,8 @@ def load_day(day: dt.date) -> pd.DataFrame:
     r = requests.get(URL.format(d=day.strftime("%Y%m%d")), headers=HEAD, timeout=60)
     if r.status_code == 404:
         raise NoData(str(day))
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(f"bhavcopy fetch failed: HTTP {r.status_code} for {day}")
     with zipfile.ZipFile(io.BytesIO(r.content)) as z:
         return pd.read_csv(z.open(z.namelist()[0]))
 
